@@ -2,7 +2,7 @@
 
 # The Natural Language Processing Toolkit (NLTK) is a Python library with a lot
 # of really powerful tools for textual analysis.
-from nltk import pos_tag, word_tokenize, download
+from nltk import pos_tag, word_tokenize, download, chunk, Tree
 # collections is a Python library with the super-awesome Counter, which takes a
 # list and returns a dictionary that tallies up how many times each value appears.
 # For example, ['red', 'red', 'rose'] would become [('red',  2), ('rose': 1)}.
@@ -12,6 +12,8 @@ import pprint
 
 download('punkt')
 download('averaged_perceptron_tagger')
+download('maxent_ne_chunker')
+download('words')
 
 
 def read_text():
@@ -103,9 +105,11 @@ def summarize_text(proper_nouns, top_num):
     find_proper_nouns function and counts the instances of each.  For this demo,
     we are using the most_common method that comes with the Counter.
     '''
-    counts = dict(Counter(proper_nouns).most_common(top_num))
-    # counts = dict(Counter(proper_nouns))
-    return {k: v for k, v in sorted(counts.items(), key=lambda item: item[1])}
+    # counts = dict(Counter(proper_nouns).most_common(top_num))
+    proper_nouns_only = [pn[0] for pn in proper_nouns]
+    pn_to_tuple = {pn[0]: pn for pn in proper_nouns}
+    counts = dict(Counter(proper_nouns_only))
+    return {k: [v, pn_to_tuple[k][1]] for k, v in sorted(counts.items(), key=lambda item: item[1])}
 
 
 def is_nnp(curr_tagged_text):
@@ -144,27 +148,37 @@ def find_proper_nouns_v2(tagged_text):
     proper_nouns = []
     i = 0
     while i < len(tagged_text):
+        tag = []
         name = ""
         if is_nnp(tagged_text[i]):
             name += tagged_text[i][0].lower() + " "
+            tag.append(tagged_text[i][1])
             j = i + 1
             while j < len(tagged_text):
                 if is_nnp(tagged_text[j]):
                     name += tagged_text[j][0].lower()
+                    tag.append(tagged_text[j][1])
                     j += 1
                     continue
                 if is_pos(tagged_text[j]) and is_nnp(tagged_text[j+1]):
                     name = name.strip() + tagged_text[j][0].lower() + " " + tagged_text[j+1][0].lower() + " "
+                    tag.append(tagged_text[j][1])
+                    tag.append(tagged_text[j+1][1])
                     j += 2
                     continue
                 if is_cc(tagged_text[j]) and is_nnp(tagged_text[j+1]):
-                    name += tagged_text[j][0].lower() + " " + tagged_text[j + 1][0].lower() + " "
+                    name += tagged_text[j][0].lower() + " " + tagged_text[j+1][0].lower() + " "
+                    tag.append(tagged_text[j][1])
+                    tag.append(tagged_text[j+1][1])
                     j += 2
                     continue
                 break
             if i >= 1 and is_dt(tagged_text[i - 1]):
                 name = tagged_text[i - 1][0].lower() + " " + name + " "
-            proper_nouns.append(name.strip())
+                tag = [tagged_text[j - 1][1]] + tag
+
+            if '-' not in name:
+                proper_nouns.append([name.strip(), tag])
             i = j
         i += 1  # increment the i counter
     return proper_nouns
@@ -182,9 +196,108 @@ def find_proper_nouns_v2(tagged_text):
 # next function
 a = read_text()
 b = text_tokenize(a)
-c = tagging(b)
-d = find_proper_nouns_v2(c)
+tagged = tagging(b)
+d = find_proper_nouns_v2(tagged)
 e = summarize_text(d, 100)
 
-for k,v in sorted(e.items(), key=lambda item: item[1], reverse=True):
-    print(k, v)
+# top_10 = []
+limit = 20
+for idx, (k,v) in enumerate(sorted(e.items(), key=lambda item: item[1], reverse=True), start=1):
+    if idx == limit + 1:
+        break
+    print(f"{idx}. {k}, {v}")
+    # if len(top_10) < 10:
+    #     top_10.append(k)
+    # else:
+    #     for t in top_10:
+    #         t_split = t.split()
+    #         k_split = k.split()
+    #
+    #         for tt in t_split:
+    #             if
+
+#
+# print(tagged)
+entities = chunk.ne_chunk(tagged)
+# print(type(entities))
+# for k, v in entities.items():
+#     print(k, v)
+# print(entities)
+
+
+ROOT = 'ROOT'
+
+def getNodes(parent):
+    persons = []
+    for node in parent:
+        if type(node) is Tree:
+            if node.label() == ROOT:
+                pass
+            #     print("======== Sentence =========")
+            #     print("Sentence:", " ".join(node.leaves()))
+            else:
+                # print("Label:", node.label())
+                if node.label() == "PERSON":
+                    persons.append((' '.join([n[0] for n in node.leaves()]), [n[1] for n in node.leaves()]))
+                    # print("Leaves:", node.leaves())
+
+            getNodes(node)
+        # else:
+        #     print("Word:", node)
+    return persons
+
+persons = getNodes(entities)
+
+persons_only = [pn[0] for pn in persons]
+pn_to_tuple = {pn[0]: pn for pn in persons}
+counts = dict(Counter(persons_only))
+res = {k: [v, pn_to_tuple[k][1]] for k, v in sorted(counts.items(), key=lambda item: item[1])}
+print("----------------------------")
+
+for idx, (k,v) in enumerate(sorted(res.items(), key=lambda item: item[1], reverse=True), start=1):
+    if idx == limit + 1:
+        break
+    print(f"{idx}. {k}, {v}")
+#
+# harry [1212, ['NNP']]
+# ron [361, ['NNP']]
+# hagrid [354, ['NNP']]
+# hermione [178, ['NNP']]
+# snape [145, ['NNP']]
+# dudley [118, ['NNP']]
+# dumbledore [111, ['NNP']]
+# neville [110, ['NNP']]
+# malfoy [107, ['NNP']]
+# uncle vernon [99, ['NNP', 'NNP']]
+# professor mcgonagall [91, ['NNP', 'NNP']]
+# quirrell [88, ['NNP']]
+# gryffindor [57, ['NNP']]
+# hogwarts [54, ['NNP']]
+# the dursleys [48, ['NNP', 'NNP']]
+# potter [46, ['NNP']]
+# wood [46, ['NNP']]
+# aunt petunia [43, ['NNP', 'NNP']]
+# filch [43, ['NNP']]
+# well [40, ['NNP']]
+#
+#
+# Harry [1244, ['NNP']]
+# Ron [411, ['NNP']]
+# Hagrid [286, ['NNP']]
+# Hermione [230, ['NNP']]
+# Snape [140, ['NNP']]
+# Dudley [125, ['NNP']]
+# Uncle Vernon [104, ['NNP', 'NNP']]
+# Neville [93, ['NNP']]
+# Dumbledore [81, ['NNP']]
+# Malfoy [63, ['NNP']]
+# Quirrell [54, ['NNP']]
+# Aunt Petunia [50, ['NNP', 'NNP']]
+# Wood [49, ['NN']]
+# Filch [44, ['NNP']]
+# Professor McGonagall [41, ['NNP', 'NNP']]
+# Potter [36, ['NNP']]
+# Percy [31, ['NNP']]
+# Mr. Dursley [29, ['NNP', 'NNP']]
+# Harry Potter [25, ['NNP', 'NNP']]
+# Slytherin [25, ['NNP']]
