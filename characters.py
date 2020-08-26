@@ -10,21 +10,22 @@ from collections import Counter
 # PrettyPrinter will make our final output easier to read in the console.
 import pprint
 
+from nlp_harry_potter import utilities
+
 download('punkt')
 download('averaged_perceptron_tagger')
 download('maxent_ne_chunker')
 download('words')
 
 
-def read_text():
+def read_text(book_name):
     '''
     This function reads the text into python from a text file.
     When you read in your own file, replace 'corpus/hp1.txt' with the path
     to your file.
     '''
-    with open('Harry_Potter_and_the_Sorcerer_v2.txt', 'r') as f:
+    with open(book_name, 'r') as f:
         book = f.read()
-    f.close()
     return book
 
 def text_tokenize(book):
@@ -194,8 +195,18 @@ def find_proper_nouns_v2(tagged_text):
 
 # This is where we call all of our functions and pass what they return to the
 # next function
-a = read_text()
-b = text_tokenize(a)
+book1 = "Harry Potter 1 - Sorcerer's Stone.txt"
+book2 = "Harry Potter 2 - Chamber of Secrets.txt"
+book3 = "Harry Potter 3 - The Prisoner Of Azkaban.txt"
+book4 = "Harry Potter 4 - The Goblet Of Fire.txt"
+book5 = "Harry Potter 5 - Order of the Phoenix.txt"
+book6 = "Harry Potter 6 - The Half Blood Prince.txt"
+book7 = "Harry Potter 7 - Deathly Hollows.txt"
+
+bookx = "Clancy Tom - Patriot Games.txt"
+
+book = read_text(bookx)
+b = text_tokenize(book)
 tagged = tagging(b)
 d = find_proper_nouns_v2(tagged)
 e = summarize_text(d, 100)
@@ -227,8 +238,7 @@ entities = chunk.ne_chunk(tagged)
 
 ROOT = 'ROOT'
 
-def getNodes(parent):
-    persons = []
+def get_node(parent, tag, res_list):
     for node in parent:
         if type(node) is Tree:
             if node.label() == ROOT:
@@ -237,16 +247,28 @@ def getNodes(parent):
             #     print("Sentence:", " ".join(node.leaves()))
             else:
                 # print("Label:", node.label())
-                if node.label() == "PERSON":
-                    persons.append((' '.join([n[0] for n in node.leaves()]), [n[1] for n in node.leaves()]))
+                if node.label() == tag:
+                    res_list.append((' '.join([n[0] for n in node.leaves()]), [n[1] for n in node.leaves()]))
                     # print("Leaves:", node.leaves())
 
-            getNodes(node)
+            get_node(node, tag, res_list)
         # else:
         #     print("Word:", node)
-    return persons
+    return res_list
 
-persons = getNodes(entities)
+
+def get_person(parent):
+    persons = []
+    return get_node(parent, "PERSON", persons)
+
+# didn't work
+# def get_location(parent):
+#     locations = []
+#     return get_node(parent, "LOCATION", locations)
+
+
+persons = get_person(entities)
+# locations = get_location(entities)
 
 persons_only = [pn[0] for pn in persons]
 pn_to_tuple = {pn[0]: pn for pn in persons}
@@ -258,6 +280,45 @@ for idx, (k,v) in enumerate(sorted(res.items(), key=lambda item: item[1], revers
     if idx == limit + 1:
         break
     print(f"{idx}. {k}, {v}")
+
+# locations_only = [ln[0] for ln in locations]
+# ln_to_tuple = {ln[0]: ln for ln in locations}
+# counts_location = dict(Counter(locations_only))
+# res_location = {k: [v, ln_to_tuple[k][1]] for k, v in sorted(counts_location.items(), key=lambda item: item[1])}
+# print("----------------------------")
+#
+# for idx, (k, v) in enumerate(sorted(res_location.items(), key=lambda item: item[1], reverse=True), start=1):
+#     if idx == limit + 1:
+#         break
+#     print(f"{idx}. {k}, {v}")
+#
+import spacy
+cts = utilities.country_list_maker()
+cts.update(utilities.other_vectors())
+skip_list = utilities.make_skip_list(cts)
+
+# Need to run 'python3 -m spacy download en_core_web_lg'
+nlp_location = spacy.load('en_core_web_lg', disable=['parser', 'tagger'])
+doc = nlp_location(book)
+ents = []
+for ent in doc.ents:
+    if not ent.text.strip():
+        continue
+    if ent.label_ not in ["GPE", "LOC", "FAC"]:
+        continue
+    # don't include country names (make a parameter)
+    if ent.text.strip() in skip_list:
+        continue
+    ents.append(ent)
+if not ents:
+    print("empty")
+
+print(f"Found {len(set([ent.text.strip() for ent in ents]))} locations")
+
+for e in set([ent.text.strip() for ent in ents]):
+    print(e)
+# print(set(ents))
+    # Location
 #
 # harry [1212, ['NNP']]
 # ron [361, ['NNP']]
