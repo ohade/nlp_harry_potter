@@ -203,9 +203,10 @@ book5 = "Harry Potter 5 - Order of the Phoenix.txt"
 book6 = "Harry Potter 6 - The Half Blood Prince.txt"
 book7 = "Harry Potter 7 - Deathly Hollows.txt"
 
+path = "/Users/ohad.e/Projects/study/nlp_final/nlp_harry_potter/books/"
 bookx = "Clancy Tom - Patriot Games.txt"
 
-book = read_text(bookx)
+book = read_text(path + bookx)
 b = text_tokenize(book)
 tagged = tagging(b)
 d = find_proper_nouns_v2(tagged)

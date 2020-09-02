@@ -520,27 +520,35 @@ def read_text(novel_folder, novel_name):
     return book
 
 
-def name_entity_recognition(nlp_func, sentence):
+def name_entity_recognition(nlp_func, sentence, labels=None, other_stop_words=None):
     '''
     A function to retrieve name entities in a sentence.
     :param sentence: the sentence to retrieve names from.
     :return: a name entity list of the sentence.
     '''
-
+    flag = False
+    if labels is None:
+        flag = True
+        labels = ['PERSON', 'ORG']
     doc = nlp_func(sentence)
     # retrieve person and organization's name from the sentence
-    name_entity = [x for x in doc.ents if x.label_ in ['PERSON', 'ORG']]
+    name_entity = [x for x in doc.ents if x.label_ in labels]
     # convert all names to lowercase and remove 's in names
     name_entity = [str(x).lower().replace("'s", "") for x in name_entity]
     # split names into single words ('Harry Potter' -> ['Harry', 'Potter'])
-    name_entity = [x.split(' ') for x in name_entity]
-    # flatten the name list
-    name_entity = flatten(name_entity)
+    if flag:
+        name_entity = [x.split(' ') for x in name_entity]
+        # flatten the name list
+        name_entity = flatten(name_entity)
+
     # remove name words that are less than 3 letters to raise recognition accuracy
     name_entity = [x for x in name_entity if len(x) >= 3]
     # remove name words that are in the set of 4000 common words
     name_entity = [x for x in name_entity if x not in common_words]
-
+    a = len(name_entity)
+    if other_stop_words:
+        name_entity = [x for x in name_entity if x not in other_stop_words]
+    b = len(name_entity)
     return name_entity
 
 
@@ -564,6 +572,31 @@ def iterative_NER(nlp_func, sentence_list, threshold_rate=0.0005):
     output = Counter(output)
     output = [x for x in output if output[x] >= threshold_rate * len(sentence_list)]
 
+    return output
+
+
+def iterative_NER_v2(nlp_func, sentence_list, threshold_rate=0.0005, extract_places=False, other_stop_words=None):
+    '''
+    A function to execute the name entity recognition function iteratively. The purpose of this
+    function is to recognise all the important names while reducing recognition errors.
+    :param sentence_list: the list of sentences from the novel
+    :param threshold_rate: the per sentence frequency threshold, if a word's frequency is lower than this
+    threshold, it would be removed from the list because there might be recognition errors.
+    :return: a non-duplicate list of names in the novel.
+    '''
+    output = []
+    for i in sentence_list:
+        if extract_places:
+            name_list = name_entity_recognition(nlp_func, i, ["GPE", "LOC", "FAC"], other_stop_words)
+        else:
+            name_list = name_entity_recognition(nlp_func, i)
+        if name_list != []:
+            output.append(name_list)
+    output = flatten(output)
+    from collections import Counter
+    output = Counter(output)
+    output = [x for x in output if output[x] >= threshold_rate * len(sentence_list)]
+    print(f"output len:{len(output)}")
     return output
 
 
@@ -610,7 +643,6 @@ def calculate_matrix(name_list, sentence_list, align_rate):
     the author. Every co-occurrence will lead to an increase or decrease of one unit of align_rate.
     :return: the co-occurrence matrix and sentiment matrix.
     '''
-
     # calculate a sentiment score for each sentence in the novel
     afinn = Afinn()
     sentiment_score = [afinn.score(x) for x in sentence_list]
@@ -655,6 +687,38 @@ def matrix_to_edge_list(matrix, mode, name_list):
     return edge_list
 
 
+def matrix_to_edge_list_v2(matrix, mode, name_list, place_list):
+    '''
+    Function to convert matrix (co-occurrence/sentiment) to edge list of the network graph. It determines the
+    weight and color of the edges in the network graph.
+    :param matrix: co-occurrence matrix or sentiment matrix.
+    :param mode: 'co-occurrence' or 'sentiment'
+    :param name_list: the list of names of the top characters in the novel.
+    :return: the edge list with weight and color param.
+    '''
+    edge_list = []
+    shape = matrix.shape[0]
+    # lower_tri_loc = list(zip(*np.where(np.triu(np.ones([shape, shape])) == 0)))
+    A = np.ones([shape, shape])
+    middle = len(name_list)
+    A[0:middle, 0:middle] = np.zeros([middle, middle])
+    A[middle:shape, middle:shape] = np.zeros([shape-middle, shape-middle])
+    lower_tri_loc = list(zip(*np.where(A == 1)))
+
+    normalized_matrix = matrix / np.max(np.abs(matrix))
+    if mode == 'co-occurrence':
+        weight = np.log(2000 * normalized_matrix + 1) * 0.7
+        color = np.log(2000 * normalized_matrix + 1)
+    else: # mode == 'sentiment'
+        weight = np.log(np.abs(1000 * normalized_matrix) + 1) * 0.7
+        color = 2000 * normalized_matrix
+    combined_list = name_list + place_list
+    for i in lower_tri_loc:
+        if weight[i] != 0.0:
+            edge_list.append((combined_list[i[0]], combined_list[i[1]], {'weight': weight[i], 'color': color[i]}))
+
+    return edge_list
+
 def plot_graph(name_list, name_frequency, matrix, plt_name, mode, path=''):
     '''
     Function to plot the network graph (co-occurrence network or sentiment network).
@@ -679,7 +743,7 @@ def plot_graph(name_list, name_frequency, matrix, plt_name, mode, path=''):
     edges = G.edges()
     weights = [G[u][v]['weight'] for u, v in edges]
     colors = [G[u][v]['color'] for u, v in edges]
-
+    print(f"edge_list: {edge_list}")
     if mode == 'co-occurrence':
         nx.draw(G, pos, node_color='#A0CBE2', node_size=np.sqrt(normalized_frequency) * 4000, edge_cmap=plt.cm.Blues,
                 linewidths=10, font_size=35, labels=label, edge_color=colors, with_labels=True, width=weights)
@@ -693,6 +757,144 @@ def plot_graph(name_list, name_frequency, matrix, plt_name, mode, path=''):
     plt.savefig("output/" + path + plt_name + '.png')
 
 
+def plot_graph_v2(name_list, name_frequency, place_list, place_frequency, matrix, plt_name, mode, path=''):
+    '''
+    Function to plot the network graph (co-occurrence network or sentiment network).
+    :param name_list: the list of top character names in the novel.
+    :param name_frequency: the list containing the frequencies of the top names.
+    :param matrix: co-occurrence matrix or sentiment matrix.
+    :param plt_name: the name of the plot (PNG file) to output.
+    :param mode: 'co-occurrence' or 'sentiment'
+    :param path: the path to output the PNG file.
+    :return: a PNG file of the network graph.
+    '''
+
+    label = {i: i for i in name_list + place_list}
+    edge_list = matrix_to_edge_list_v2(matrix, mode, name_list, place_list)
+    normalized_frequency = np.array(name_frequency + place_frequency) / np.max(name_frequency + place_frequency)
+
+    plt.figure(figsize=(20, 20))
+    G = nx.Graph()
+    print(name_list)
+    print(place_list)
+    name_list_with_attr = [(n, {"color": "red"}) for n in name_list]
+    print(name_list_with_attr)
+    G.add_nodes_from(name_list_with_attr)
+    # print("^^^^^^^^^^^^^^^^")
+    # print(sorted(G.nodes(data=True), key=str))
+    # # for v in G.nodes():
+    # #     print(G[v])
+    # print("^^^^^^^^^^^^^^^^")
+    place_list_with_attr = [(p, {"color": 'blue'}) for p in place_list]
+    combined = name_list_with_attr + place_list_with_attr
+    G.add_nodes_from(combined)
+    # print("^^^^^^^^^^^^^^^^")
+    # for v in G.nodes():
+    #     print(G[v])
+    # print("^^^^^^^^^^^^^^^^")
+    G.add_edges_from(edge_list)
+    # print(f"edge_list: {edge_list}")
+    pos = nx.circular_layout(G)
+    print(f"pos: {pos}")
+    edges = G.edges()
+    nodes = G.nodes()
+    weights = [G[u][v]['weight'] for u, v in edges]
+    # print("$$$$$$$")
+    # print(G.nodes(data=True))
+    # print("------")
+    # for v in nodes:
+    #     print(G[v])
+    # print("------")
+    # for u, v in edges:
+    #     print(G[u][v])
+    # print("------")
+    # node_colors = [G[v]['color'] for v in nodes]
+    edge_colors = [G[u][v]['color'] for u, v in edges]
+
+
+    if mode == 'co-occurrence':
+        nx.draw(G, pos, node_size=np.sqrt(normalized_frequency) * 4000, edge_cmap=plt.cm.Blues,
+                linewidths=10, font_size=35, labels=label, edge_color=edge_colors, with_labels=True)
+    elif mode == 'sentiment':
+        nx.draw(G, pos, node_size=np.sqrt(normalized_frequency) * 4000,
+                linewidths=10, font_size=35, labels=label, edge_color=edge_colors, with_labels=True,
+                edge_vmin=-1000, edge_vmax=1000)
+    else:
+        raise ValueError("mode should be either 'co-occurrence' or 'sentiment'")
+
+    plt.savefig("output/" + path + plt_name + '.png')
+    plt.show()
+
+def plot_graph_v3(name_list, name_frequency, place_list, place_frequency, matrix, plt_name, mode, path=''):
+    '''
+    Function to plot the network graph (co-occurrence network or sentiment network).
+    :param name_list: the list of top character names in the novel.
+    :param name_frequency: the list containing the frequencies of the top names.
+    :param matrix: co-occurrence matrix or sentiment matrix.
+    :param plt_name: the name of the plot (PNG file) to output.
+    :param mode: 'co-occurrence' or 'sentiment'
+    :param path: the path to output the PNG file.
+    :return: a PNG file of the network graph.
+    '''
+    label = {i: i for i in name_list + place_list}
+    edge_list = matrix_to_edge_list_v2(matrix, mode, name_list, place_list)
+    normalized_frequency = np.array(name_frequency + place_frequency) / np.max(name_frequency + place_frequency)
+
+    plt.figure(figsize=(20, 20))
+    G = nx.Graph()
+    # print(name_list)
+    # print(place_list)
+    name_list_with_attr = [(n, {"color": "red"}) for n in name_list]
+    # print(name_list_with_attr)
+    G.add_nodes_from(name_list_with_attr)
+    # print("^^^^^^^^^^^^^^^^")
+    # print(sorted(G.nodes(data=True), key=str))
+    # # for v in G.nodes():
+    # #     print(G[v])
+    # print("^^^^^^^^^^^^^^^^")
+    place_list_with_attr = [(p, {"color": 'blue'}) for p in place_list]
+    combined = name_list_with_attr + place_list_with_attr
+    G.add_nodes_from(combined)
+    # print("^^^^^^^^^^^^^^^^")
+    # for v in G.nodes():
+    #     print(G[v])
+    # print("^^^^^^^^^^^^^^^^")
+    G.add_edges_from(edge_list)
+    # print(f"edge_list: {edge_list}")
+    pos = nx.circular_layout(G)
+
+    label = {i: i for i in name_list + place_list}
+    edge_list = matrix_to_edge_list_v2(matrix, mode, name_list, place_list)
+    normalized_frequency = np.array(name_frequency + place_frequency) / np.max(name_frequency + place_frequency)
+
+    plt.figure(figsize=(20, 20))
+    G = nx.Graph()
+    # print(name_list)
+    # print(place_list)
+
+    pos = pos
+    # print(pos)
+    options = {"node_size": 500, "alpha": 0.8}
+    nx.draw_networkx_nodes(G, pos, nodelist=name_list, node_color="r", **options)
+    nx.draw_networkx_nodes(G, pos, nodelist=place_list, node_color="b", **options)
+
+    e_list = [(e[0], e[1]) for e in edge_list]
+    nx.draw_networkx_edges(
+        G,
+        pos,
+        edgelist=e_list,
+        width=8,
+        alpha=0.5,
+        edge_color="r",
+    )
+    labels = {}
+    comb = name_list + place_list
+    for i in range(len(comb)):
+        labels[comb[i]] = comb[i]
+    nx.draw_networkx_labels(G, pos, labels, font_size=16)
+    plt.show()
+
+
 synonym = dict()
 harry = ['harry', 'harry potter', 'potter']
 ron = ['ron weasley', 'ron', 'weasley']
@@ -703,35 +905,4 @@ hagrid = ['rubeus Hagrid', 'professor rubeus hagrid', 'hagrid', 'professor hagri
 malfoy = ['malfoy', 'draco', 'draco malfoy', 'draco lucius malfoy']
 mcgonagall = ['mcgonagall', 'professor mcgonagall']
 neville = ['neville longbottom', 'neville']
-
-# if __name__ == '__main__':
-#     # TODO: run `python3 -m spacy download en_core_web_sm`
-#     print(1)
-#     nlp = spacy.load('en_core_web_sm')
-#     print(2)
-#     novel_name = "Harry Potter 1"
-#     # novel_folder = Path(os.getcwd()) / 'novels'
-#     novel = read_text("/Users/ohad.e/Projects/study/nlp_final/nlp_harry_potter/Harry Potter 1 - Sorcerer's Stone.txt")
-#     print(3)
-#     sentence_list = sent_tokenize(novel)
-#     print(4)
-#     align_rate = calculate_align_rate(sentence_list)
-#     print(5)
-#     preliminary_name_list = iterative_NER(sentence_list)
-#     print(6)
-#     name_frequency, name_list = top_names(preliminary_name_list, novel, 25)
-#     print(7)
-#     cooccurrence_matrix, sentiment_matrix = calculate_matrix(name_list, sentence_list, align_rate)
-#     print(8)
-#     # plot co-occurrence and sentiment graph for Harry Potter
-#     plot_graph(name_list, name_frequency, cooccurrence_matrix, novel_name + ' co-occurrence graph', 'co-occurrence')
-#     plot_graph(name_list, name_frequency, sentiment_matrix, novel_name + ' sentiment graph', 'sentiment')
-
-    # plot network graph by season
-    # novel_list = [novel_name + ' ' + str(season) for season in range(1, 8)]
-    # for name in novel_list:
-    #     novel = read_novel(name, novel_folder)
-    #     sentence_list = sent_tokenize(novel)
-    #     cooccurrence_matrix, sentiment_matrix = calculate_matrix(name_list, sentence_list, align_rate)
-    #     plot_graph(name_list, name_frequency, cooccurrence_matrix, name + ' co-occurrence graph', 'co-occurrence')
-    #     plot_graph(name_list, name_frequency, sentiment_matrix, name + ' sentiment graph', 'sentiment')
+places = ["Majorca", "Tibbles, Snowy", "Hogwarts", "Mount", "Blackpool", "Privet Drive --'", "Underground", "Flint", "the Black Forest", "yeh'll", "Pince", "Great Britain", "Yorkshire", "Firenze", "Dundee", "Brazil", "Gryffindor tower", "the Famous Witches and Wizards", "England", "London", "Quidditch", "the Golden Snitch", "Easter", "Yeh'll", "Stick", "Pewter", "Romania", "the London Underground", "Devon", "Ireland", "the Great Hall", "turkey", "Quidditch cup", "the Isle of Wight", "Gringotts", "the Leg-Locker Curse", "The Great Hall", "Diagon Alley", "Uncle Vernon", "Brass", "Vernon", "Mars", "Bristol", "Apothecary", "Snitch", "Muggle", "Smelting stick", "Mars Bars", "Paddington", "Galleon", "Egg to Inferno", "Dursley", "Britain", "Jupiter", "the Sahara Desert", "Gryffindor Tower", "Tawny", "phoenix", "the Smelting stick", "Prewetts", "Kent", "Uncle Vernon's", "Beechwood", "-the Great Hall", "the Dark Side", "the Leaky Cauldron", "Privet Drive"]
